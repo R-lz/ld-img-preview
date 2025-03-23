@@ -62,8 +62,11 @@ class ImageViewer {
   // 保存设置
   saveSettings() {
     try {
-      // 尝试使用Chrome存储API
-      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      // 检查Chrome扩展上下文是否有效
+      const isExtensionContextValid = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id;
+      
+      // 尝试使用Chrome存储API（仅当扩展上下文有效时）
+      if (isExtensionContextValid && chrome.storage && chrome.storage.local) {
         chrome.storage.local.set({ 
           'contrastMode': this.contrastMode,
           'currentRotation': this.currentRotation
@@ -75,6 +78,13 @@ class ImageViewer {
       }
     } catch (e) {
       console.error('无法保存设置:', e);
+      // 出错时尝试使用localStorage作为备选
+      try {
+        localStorage.setItem('linuxdo-contrast-mode', this.contrastMode);
+        localStorage.setItem('linuxdo-rotation', this.currentRotation.toString());
+      } catch (localStorageError) {
+        // 忽略localStorage错误，防止显示过多错误信息
+      }
     }
   }
   
@@ -444,19 +454,21 @@ class ImageViewer {
     }
     
     // 检查图片是否过大而超出容器范围
-    if (imgRect.width > containerRect.width || imgRect.height > containerRect.height) {
+    if (imgRect.width > containerRect.width * 0.95 || imgRect.height > containerRect.height * 0.95) {
       // 计算需要的缩放比例，使图片完全适合容器
       const scaleX = containerRect.width / imgRect.width * 0.9;
       const scaleY = containerRect.height / imgRect.height * 0.9;
       const adjustScale = Math.min(scaleX, scaleY);
       
       // 只在图片明显过大时才缩小
-      if (adjustScale < 0.9) {
+      if (adjustScale < 0.95) {
         this.currentScale *= adjustScale;
+        
+        // 应用新的缩放，但不改变尺寸约束
         this.applyTransform();
         
-        // 重新检查位置
-        setTimeout(() => this.ensureImageVisible(), 50);
+        // 记录缩放调整
+        console.log(`图片已自动缩小: 比例=${adjustScale.toFixed(2)}`);
       }
     }
   }
@@ -536,20 +548,19 @@ class ImageViewer {
   rotateImage() {
     if (!this.img) return;
     
+    // 保存旧的旋转角度，用于检测方向变化
     const oldRotation = this.currentRotation;
     
     // 每次旋转90度
     this.currentRotation = (this.currentRotation + 90) % 360;
     
-    // 每360度旋转一周，重置变换以避免累积误差
-    if (this.currentRotation === 0 && oldRotation === 270) {
-      this.translateX = 0;
-      this.translateY = 0;
-    }
-    
     // 应用旋转变换
     this.applyTransform();
+    
+    // 重新居中（只在需要时调整）
     this.centerAfterRotation(oldRotation);
+    
+    // 尝试保存设置，错误处理已在saveSettings方法中
     this.saveSettings();
   }
   
@@ -560,33 +571,33 @@ class ImageViewer {
     const wasLandscape = oldRotation % 180 === 0;
     const isLandscape = this.currentRotation % 180 === 0;
     
-    // 如果方向发生了改变，或者完成了一周旋转
+    // 仅当方向发生改变时重新居中
     if (wasLandscape !== isLandscape || (oldRotation === 270 && this.currentRotation === 0)) {
-      // 重置位置
-      this.translateX = 0;
-      this.translateY = 0;
-      
       // 等待浏览器重新计算样式后再调整位置
       setTimeout(() => {
-        // 获取图片当前尺寸
+        // 获取图片当前尺寸和位置
         const imgRect = this.img.getBoundingClientRect();
         const containerRect = this.overlay.getBoundingClientRect();
         
-        // 计算需要的调整，使用overlay作为参考点而不是imgContainer
-        const containerCenterX = containerRect.width / 2;
-        const containerCenterY = containerRect.height / 2;
-        const imgCenterX = imgRect.left + imgRect.width / 2 - containerRect.left;
-        const imgCenterY = imgRect.top + imgRect.height / 2 - containerRect.top;
+        // 计算图片中心和容器中心
+        const imgCenterX = imgRect.left + imgRect.width / 2;
+        const imgCenterY = imgRect.top + imgRect.height / 2;
+        const containerCenterX = containerRect.left + containerRect.width / 2;
+        const containerCenterY = containerRect.top + containerRect.height / 2;
         
-        // 调整位置使图片居中
-        this.translateX = containerCenterX - imgCenterX;
-        this.translateY = containerCenterY - imgCenterY;
+        // 计算位移差值
+        const deltaX = containerCenterX - imgCenterX;
+        const deltaY = containerCenterY - imgCenterY;
         
-        // 应用新的变换
+        // 添加位移以居中图片
+        this.translateX += deltaX;
+        this.translateY += deltaY;
+        
+        // 应用变换但不调整尺寸约束
         this.applyTransform();
         
-        // 再次检查位置是否正确
-        setTimeout(() => this.ensureImageVisible(), 50);
+        // 记录调整
+        console.log(`旋转后位置调整: X=${deltaX.toFixed(2)}px, Y=${deltaY.toFixed(2)}px`);
       }, 50);
     }
   }
@@ -601,26 +612,13 @@ class ImageViewer {
     // 应用缩放和旋转
     this.img.style.transform = `translate(${this.translateX}px, ${this.translateY}px) scale(${this.currentScale}) rotate(${this.currentRotation}deg)`;
     
-    // 根据旋转角度调整图片的尺寸约束
-    if (this.currentRotation % 180 === 90) {
-      // 旋转为竖直方向时的处理
-      const viewportWidth = window.innerWidth * 0.9;
-      const viewportHeight = window.innerHeight * 0.9;
-      
-      if (this.img.naturalWidth > this.img.naturalHeight) {
-        // 原图是横向的，旋转后需要更多的垂直空间
-        this.img.style.maxWidth = `${viewportHeight}px`;
-        this.img.style.maxHeight = `${viewportWidth}px`;
-      } else {
-        // 原图是纵向的，旋转后需要更多的水平空间
-        this.img.style.maxWidth = `${viewportHeight}px`;
-        this.img.style.maxHeight = `${viewportWidth}px`;
-      }
-    } else {
-      // 正常方向
-      this.img.style.maxWidth = '90vw';
-      this.img.style.maxHeight = '90vh';
-    }
+    // 使用一致的尺寸约束策略，不管旋转角度如何
+    // 对于所有旋转角度，使用相同的最大尺寸限制
+    this.img.style.maxWidth = '90vw';
+    this.img.style.maxHeight = '90vh';
+    
+    // 对于已旋转的图片，我们不动态改变maxWidth/maxHeight，
+    // 而是依靠transform: rotate来处理旋转，这样可以保持一致的视觉大小
   }
   
   // 下载图片
