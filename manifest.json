@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "LD图片预览增强",
+  "version": "1.0",
+  "description": "增强 LINUX DO 论坛上的图片预览功能，支持放大、缩小、旋转，以及下载原图",
+  "icons": {
+    "16": "images/icon16.png",
+    "48": "images/icon48.png",
+    "128": "images/icon128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.linux.do/*", "*://linux.do/*", "file://*/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"]
+    }
+  ],
+  "permissions": ["activeTab", "downloads", "storage"],
+  "host_permissions": ["*://*.linux.do/*", "*://linux.do/*", "file://*/*"]
+} 
